@@ -1,12 +1,13 @@
-/* ianbeer */
+# Jailbreak10
 
 READ THIS FIRST:
 if you do not have an iPod touch 6g running 10.1.1 (14b100) or and iPad mini 2 running 10.1.1 (14b100) this project will
-not work out of the box(*)! You need to fix up a couple of offsets - see the section futher down
+not work out of the box*! You need to fix up a couple of offsets - see the section futher down
 "Adding support for more devices"
 
-(*) more precisely, I only have those devices and have only tested it on them.
-(*) 1b4150 will probably also work, I haven't tested it.
+*More precisely, I only have those devices and have only tested it on them.
+
+*1b4150 will probably also work, I haven't tested it.
 
 # Contents:
  1. Build Instructions
@@ -29,51 +30,43 @@ not work out of the box(*)! You need to fix up a couple of offsets - see the sec
 
  6. In the "Signing" section, select your personal team.
 
- 7. We now need to fix up a few things:
+ 7. Navigate to Build Settings -> Packaging and give your project a new, unique bundle identifier
+    (change it from "com.example.mach_portal")
+ 
+ 8. Register a unique App Group
+    * In the capabilities view scroll down to the App Groups section, remove the existing App Group ("group.mach_portal")
+and add a new unique App Group.
+   * Open `jailbreak.c` and change the app_group variable to this new App Group ID.
+   
+ 9. On the iOS device, go to Settings -> General -> Device Management, select your Apple ID and tap Trust.
 
- * go to Build Settings -> Packaging and give your project a new, unique bundle identifier
-    (eg change it from "com.example.mach_portal" to "com.ios.test.account.mach_portal"
-     where ios.test.account is your apple id. (it doesn’t have to be your apple id, just a unique string))
+ 10. In Xcode, click View -> Debug Area -> Activate Console so you can see debugging output.
 
- * We also need to register a unique App Group:
+ 11. Make sure your iOS device and host are connected to the same Wi-Fi network and that network allows client to client connections. Note the iOS device's IP address.
 
- * In the capabilities view scroll down to the App Groups section, remove the existing App Group ("group.mach_portal")
-   and add a new unique one (eg "group.ios.test.account.mach_portal")
+ 12. Build and run the app on the iOS device. If it fails, press and hold the power and home buttons to reset the device. If it succeeds you should see:
+ ```
+ "shell listening on port 4141"
+```
 
- * open jailbreak.c and change the app_group variable to this new app group id.
+ 13. The kernel exploit is only around 50% reliable (this can certainly be improved, read the code and make it better!). It will fail more often if there is high system load -- try leaving the device for a minute after rebooting it and connecting it to you Mac before trying again.
 
- * on the iDevice go to settings -> General -> Device Management and select your apple ID and click trust
+ 14. Connect to that port with netcat: `nc X.X.X.X 4141` where X.X.X.X is your iOS device’s IP address.
 
- * in xcode click view -> debug area -> activate console so you can see debugging output (there's no output on the iDevice screen at all, that's normal)
+ 15. This will give you a root shell on your iOS device.
 
- * make sure your iDevice and host are connected to the same wifi network and that network allows client to client connections. Note down the iDevice's ip address.
+* You can run any pseudo-signed thin ARM64 binaries -- If you want the kernel task port, it's host special port 4.
 
- * click play to run the app on the iDevice. If it fails press and hold the power and home buttons to reset the device. If Xcode asks you to enable developer mode on this mac agree.
+* Copy your custom testing tools to the iosbinpack64 directory and they'll be bundled with the .app so you can run them from the shell.
 
- * if it succeeds you should see:
-    "shell listening on port 4141"
-   printed to the debug consol
+* You're running as an unsandboxed root user so you can talk to any iokit user clients/mach services.
 
- * the kernel exploit is only around 50% reliable (this can certainly be improved, read the code and make it better!)
-     it will fail more often if there is high system load - try leaving the device for a minute after rebooting it and connecting it to you mac before trying again
+* amfid is patched to allow any signatures/entitlements
 
- * connect to that port with netcat:
-     nc X.X.X.X 4141
-   where X.X.X.X is your iDevice’s ip address
+* When you’re done hold power and home to reset the iOS device
 
- * you have a root shell :) There’s no controlling terminal so fancy curses gui stuff won't work unless you fix that
+**(2) Adding support for other devices**
 
- * you can run any pseudo-signed thin ARM64 binaries - if you want the kernel task port it's host special port 4
-
- * copy your custom testing tools to the iosbinpack64 directory and they'll be bundled with the .app so you can run them from the shell
-
- * you're running as an unsandboxed root user so you can talk to any iokit user clients/mach services
-
- * amfid is patched to allow any signatures/entitlements
-
- * When you’re done hold power and home to reset the device
-
-*** (2) Adding support for other devices ***
  * you have to do this manually, sorry!
 
  * download the ipsw for your device from https://www.theiphonewiki.com/wiki/Firmware
