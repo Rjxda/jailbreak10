@@ -315,7 +315,7 @@ I add all those dummy services to a portset and use that recieve right and the l
 To crash powerd I use CVE-2016-7661:
 
 powerd checks in with launchd to get a server port and then wraps that in a CFPort:
-```
+```C
   pmServerMachPort = _SC_CFMachPortCreateWithPort(
                           "PowerManagement",
                           serverPort, 
@@ -323,7 +323,7 @@ powerd checks in with launchd to get a server port and then wraps that in a CFPo
                           &context);
 ```
 It also asks to receive dead name notifications for other ports on that same server port:
-```
+```C
   mach_port_request_notification(
               mach_task_self(),           // task
               notify_port_in,                 // port that will die
