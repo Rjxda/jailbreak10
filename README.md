@@ -48,7 +48,6 @@ and add a new unique App Group.
  ```
  "shell listening on port 4141"
 ```
-
  13. The kernel exploit is only around 50% reliable (this can certainly be improved, read the code and make it better!). It will fail more often if there is high system load -- try leaving the device for a minute after rebooting it and connecting it to you Mac before trying again.
 
  14. Connect to that port with netcat: `nc X.X.X.X 4141` where X.X.X.X is your iOS device’s IP address.
@@ -71,8 +70,7 @@ and add a new unique App Group.
    is encrypted so you'll have to do the rest yourself).
 
  2. For >= iOS 10, unzip the ipsw and hexdump the kernel.release.* file like this:
-
-```
+ ```
 $ hexdump -C kernelcache.release.n51 | head
 00000000  30 83 b5 9b 0d 16 04 49  4d 34 50 16 04 6b 72 6e  |0......IM4P..krn|
 00000010  6c 16 1c 4b 65 72 6e 65  6c 43 61 63 68 65 42 75  |l..KernelCacheBu|
@@ -84,8 +82,7 @@ $ hexdump -C kernelcache.release.n51 | head
 000001b0  00 00 00 00 ff cf fa ed  fe 0c 00 00 01 d5 00 f6  |................|
 000001c0  f0 02 f6 f0 14 f6 f0 38  0e 9a f3 f1 20 f6 f1 00  |.......8.... ...|
 000001d0  19 ff f1 f5 f0 5f 9f 5f  54 45 58 54 09 02 1c 03  |....._._TEXT....|
-```
-
+  ```
  3. Note the offset of the `ff cf fa ed fe` byte sequence (in this case it's 0x1b4).
 
  4. Compile [lzssdec](http://nah6.com/~itsme/cvs-xdadevtools/iphone/tools/lzssdec.cpp).
@@ -131,45 +128,34 @@ I also rely on a handful of offsets in amfid; you should be able to find those v
 
 ## (3) Notes on the bugs and exploits
 
-This project is called "mach_portal" - it's the result of a research project I did this year looking at mach ports. (All the bugs used
-involve mach ports :-) ) There are two main bugs plus one more which is only used to force a service to restart:
+This project is called "mach_portal" -- it's the result of a research project I did this year looking at mach ports. (All the bugs used involve mach ports). There are two main bugs plus one more which is only used to force a service to restart:
 
-CVE-2016-7637: Broken kernel mach port name uref handling on iOS/MacOS can lead to privileged port name replacement in other processes
+* CVE-2016-7637: Broken kernel mach port name uref handling on iOS/MacOS can lead to privileged port name replacement in other processes
 
-CVE-2016-7644: XNU kernel UaF due to lack of locking in set_dp_control_port
+* CVE-2016-7644: XNU kernel UaF due to lack of locking in set_dp_control_port
 
-CVE-2016-7661: MacOS/iOS arbitrary port replacement in powerd
+* CVE-2016-7661: MacOS/iOS arbitrary port replacement in powerd
 
-There is no untether (persistent codesigning bypass) but the exploit will temporarily disable codesigning while it runs so you can run
-unsigned binaries.
+There is no untether (persistent codesigning bypass) but the exploit will temporarily disable codesigning while it runs so you can run unsigned binaries.
 
 The high level exploit flow is like this:
 
-I use CVE-2016-7637 to replace launchd's send right to com.apple.iohideventsystem with a send right to a port for which I hold the receive right.
-I use CVE-2016-7661 to crash the powerd daemon (which runs as root). It gets automatically restarted and as part of its startup it will
-lookup the com.apple.iohideventsystem mach service and send its own task port to that service. Since I hold the receive
-right for that port this means that powerd actually sends me its task port giving me complete control over it :-)
-I use powerd's task port to get the host_priv port which I use to trigger the kernel bug.
+* I use CVE-2016-7637 to replace launchd's send right to com.apple.iohideventsystem with a send right to a port for which I hold the receive right.
+* I use CVE-2016-7661 to crash the powerd daemon (which runs as root). It gets automatically restarted and as part of its startup it will lookup the com.apple.iohideventsystem mach service and send its own task port to that service. Since I hold the receive right for that port this means that powerd actually sends me its task port giving me complete control over it.
+* I use powerd's task port to get the host_priv port which I use to trigger the kernel bug.
 
-The kernel bug is a lack of locking when releasing a reference on a port. I allocate a large number of mach ports then trigger the bug on around 20
-of them which are likely to be allocated near each other in the kernel. I use no-more-senders notifications so I can deterministically know when I've
-managed to over-release a port so that I can actually give myself dangling port pointers at an exact point in time later.
+The kernel bug is a lack of locking when releasing a reference on a port. I allocate a large number of mach ports then trigger the bug on around 20 of them which are likely to be allocated near each other in the kernel. I use no-more-senders notifications so I can deterministically know when I've managed to over-release a port so that I can actually give myself dangling port pointers at an exact point in time later.
 
 I free all these mach ports (leaving myself with ~20 dangling mach port pointers) and force a zone GC. I try to move
-the page pointed to by all the dangling port pointers into the kalloc.4096 zone and then I send myself a large number of mach message containing OOL
-ports with send rights to the host port. I set up these OOL port pages so that overlapping the dangling port's context pointers there's a pointer
-to the host port ipc_port and the dangling port's lock and is_guarded fields are replaced with NULL pointers.
+the page pointed to by all the dangling port pointers into the kalloc.4096 zone and then I send myself a large number of mach message containing OOL ports with send rights to the host port. I set up these OOL port pages so that overlapping the dangling port's context pointers there's a pointer to the host port ipc_port and the dangling port's lock and is_guarded fields are replaced with NULL pointers.
 
 If that all worked I can call mach_port_get_context on each of the dangling ports and I should get back the address of the host port ipc_port.
 
-The kernel task port is allocated at around the same time as the host port and as such they both end up in the same kernel zone page. I work
-out the base of this page then call mach_port_set_context on all of the dangling ports passing each possible address of the kernel task port
-in turn. I then receive all the ports I sent to myself and if everything worked I've ended receiving a send right to the kernel task port :)
+The kernel task port is allocated at around the same time as the host port and as such they both end up in the same kernel zone page. I work out the base of this page then call mach_port_set_context on all of the dangling ports passing each possible address of the kernel task port in turn. I then receive all the ports I sent to myself and if everything worked I've ended receiving a send right to the kernel task port.
 
-Here's a more detailed writeup of the sandbox escape part of the exploit. You'll have to read the code for the kernel exploit, I haven't written
-a longer writeup for that yet.
+Here's a more detailed writeup of the sandbox escape part of the exploit. You'll have to read the code for the kernel exploit, I haven't written a longer writeup for that yet.
 
-*** Sandbox escape ***
+### Sandbox Escape
 
 When sending and receiving mach messages from userspace there are two important kernel objects; ipc_entry and
 ipc_object.
@@ -178,9 +164,9 @@ ipc_entry's are the per-process handles or names which a process uses to refer t
 
 ipc_object is the actual message queue (or kernel object) which the port refers to.
 
-ipc_entrys have a pointer to the ipc_object they are a handle for along with the ie_bits field which contains
-the urefs and capacility bits for this name/handle (whether this is a send right, receive right etc.)
+ipc_entrys have a pointer to the ipc_object they are a handle for along with the ie_bits field which contains the urefs and capacility bits for this name/handle (whether this is a send right, receive right etc.)
 
+```C
   struct ipc_entry {
     struct ipc_object *ie_object;
     ipc_entry_bits_t ie_bits;
@@ -193,6 +179,7 @@ the urefs and capacility bits for this name/handle (whether this is a send right
 
 #define IE_BITS_UREFS_MASK  0x0000ffff  /* 16 bits of user-reference */
 #define IE_BITS_UREFS(bits) ((bits) & IE_BITS_UREFS_MASK)
+```
 
 The low 16 bits of the ie_bits field are the user-reference (uref) count for this name.
 
@@ -204,6 +191,7 @@ name another right (this is actually only the case for send rights).
 ipc_right_copyout is called when a right will be copied into a space (for example by sending a port right in a mach
 message to another process.) Here's the code to handle the sending of a send right:
 
+```C
     case MACH_MSG_TYPE_PORT_SEND:
         assert(port->ip_srights > 0);
         
@@ -236,27 +224,20 @@ message to another process.) Here's the code to handle the sending of a send rig
         entry->ie_bits = (bits | MACH_PORT_TYPE_SEND) + 1;  <---- (2)
         ipc_entry_modified(space, name, entry);
         break;
+```
 
+If copying this right into this space would cause that right's name's urefs count in that space to hit 0xffff then (if overflow is true) we reach the code at (1) which claims in the comment that it will leave urefs pegged at maximum. This branch doesn't increase the urefs but still returns KERN_SUCCESS. Almost all callers pass `overflow=true`.
 
-If copying this right into this space would cause that right's name's urefs count in that space to hit 0xffff
-then (if overflow is true) we reach the code at (1) which claims in the comment that it will leave urefs pegged at maximum.
-This branch doesn't increase the urefs but still returns KERN_SUCCESS. Almost all callers pass overflow=true.
+The reason for this "pegging" was probably not to prevent the reference count from becoming incorrect but rather because at (2) if the urefs count wasn't capped the reference count would overflow the 16-bit bitfield into the capability bits.
 
-The reason for this "pegging" was probably not to prevent the reference count from becoming incorrect but rather because
-at (2) if the urefs count wasn't capped the reference count would overflow the 16-bit bitfield into the capability bits.
+The issue is that the urefs count isn't "pegged" at all. I would expect "pegged" to mean that the urefs count will now stay at 0xfffe and cannot be decremented - leaking the name and associated ipc_object but avoiding the possibilty of a name being over-released.
 
-The issue is that the urefs count isn't "pegged" at all. I would expect "pegged" to mean that the urefs count will now stay at 0xfffe
-and cannot be decremented - leaking the name and associated ipc_object but avoiding the possibilty of a name being over-released.
-
-In fact all that the "peg" does is prevent the urefs count from exceeding 0xfffe; it doesn't prevent userspace from believing
-it has more urefs than that (by eg making the copyout's fail.)
+In fact all that the "peg" does is prevent the urefs count from exceeding 0xfffe; it doesn't prevent userspace from believing it has more urefs than that (by eg making the copyout's fail.)
 
 What does this actually mean?
 
-Let's consider the behaviour of mach_msg_server or dispatch_mig_server. They receive mach service messages in a loop and if the message
-they receieved didn't corrispond to the MIG schema they pass that received message to mach_msg_destroy. Here's the code where mach_msg_destroy
-destroys an ool_ports_descriptor_t:
-
+Let's consider the behaviour of mach_msg_server or dispatch_mig_server. They receive mach service messages in a loop and if the message they receieved didn't corrispond to the MIG schema they pass that received message to mach_msg_destroy. Here's the code where mach_msg_destroy destroys an ool_ports_descriptor_t:
+```C
     case MACH_MSG_OOL_PORTS_DESCRIPTOR : {
       mach_port_t                 *ports;
       mach_msg_ool_ports_descriptor_t *dsc;
@@ -271,25 +252,19 @@ destroys an ool_ports_descriptor_t:
           mach_msg_destroy_port(*ports, dsc->disposition); // calls mach_port_deallocate
       }
     ...
-
+```
 This will call mach_port_deallocate for each ool_port name received.
 
-If we send such a service a mach message with eg 0x20000 copies of the same port right as ool ports the ipc_entry for that name will actually only have
-0xfffe urefs. After 0xfffe calls to mach_port_deallocate the urefs will hit 0 and the kernel will free the ipc_entry and mark that name as free. From this
-point on the name can be re-used to name another right (for example by sending another message received on another thread) but the first thread will
-still call mach_port_deallocate 0x10002 times on that name.
+If we send such a service a mach message with eg `0x20000` copies of the same port right as ool ports the ipc_entry for that name will actually only have `0xfffe` urefs. After `0xfffe` calls to mach_port_deallocate the urefs will hit 0 and the kernel will free the ipc_entry and mark that name as free. From this point on the name can be re-used to name another right (for example by sending another message received on another thread) but the first thread will still call `mach_port_deallocate 0x10002` times on that name.
 
-This leads to something like a use-after-deallocate of the mach port name - strictly a userspace bug (there's no kernel memory corruption etc here) but
-caused by a kernel bug.
+This leads to something like a use-after-deallocate of the mach port name - strictly a userspace bug (there's no kernel memory corruption etc here) but caused by a kernel bug.
 
-The challenge to exploiting this bug is getting the exact same port name reused
-in an interesting way.
+The challenge to exploiting this bug is getting the exact same port name reused in an interesting way.
 
-This requires us to dig in a bit to exacly what a port name is, how they're allocated
-and under what circumstances they'll be reused.
+This requires us to dig in a bit to exacly what a port name is, how they're allocated and under what circumstances they'll be reused.
 
 Mach ports are stored in a flat array of ipc_entrys:
-
+```C
   struct ipc_entry {
     struct ipc_object *ie_object;
     ipc_entry_bits_t ie_bits;
@@ -299,76 +274,56 @@ Mach ports are stored in a flat array of ipc_entrys:
       ipc_table_index_t request;  /* dead name request notify */
     } index;
   };
-
-mach port names are made up of two fields, the upper 24 bits are an index into the ipc_entrys table
+```
+Mach port names are made up of two fields, the upper 24 bits are an index into the ipc_entrys table
 and the lower 8 bits are a generation number. Each time an entry in the ipc_entrys table is reused
 the generation number is incremented. There are 64 generations, so after an entry has been reallocated
 64 times it will have the same generation number.
 
 The generation number is checked in ipc_entry_lookup:
-
+```C
   if (index <  space->is_table_size) {
                 entry = &space->is_table[index];
     if (IE_BITS_GEN(entry->ie_bits) != MACH_PORT_GEN(name) ||
         IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
       entry = IE_NULL;    
   }
+```
+Here, entry is the ipc_entry struct in the kernel and name is the user-supplied mach port name.
 
-here entry is the ipc_entry struct in the kernel and name is the user-supplied mach port name.
-
-Entry allocation:
+### Entry allocation:
 The ipc_entry table maintains a simple LIFO free list for entries; if this list is free the table will 
 be grown. The table is never shrunk.
 
 Reliably looping mach port names:
 To exploit this bug we need a primitive that allows us to loop a mach port's generation number around.
 
-After triggering the urefs bug to free the target mach port name in the target process we immediately
-send a message with N ool ports (with send rights) and no reply port. Since the target port was the most recently
-freed it will be at the head of the freelist and will be reused to name the first of the ool ports
-contained in the message (but with an incremented generation number.)
-Since this message is not expected by the service (in this case we send an
-invalid XPC request to launchd) it will get passed to mach_msg_destroy which will pass each of 
-the ports to mach_port_deallocate freeing them in the order in which they appear in the message. Since the
-freed port was reused to name the first ool port it will be the first to be freed. This will push the name
-N entries down the freelist.
+After triggering the urefs bug to free the target mach port name in the target process we immediately send a message with N ool ports (with send rights) and no reply port. Since the target port was the most recently freed it will be at the head of the freelist and will be reused to name the first of the ool ports contained in the message (but with an incremented generation number.) Since this message is not expected by the service (in this case we send an invalid XPC request to launchd) it will get passed to mach_msg_destroy which will pass each of the ports to mach_port_deallocate freeing them in the order in which they appear in the message. Since the freed port was reused to name the first ool port it will be the first to be freed. This will push the name N entries down the freelist.
 
-We then send another 62 of these looper messages but with 2N ool ports. This has the effect of looping the generation
-number of the target port around while leaving it in approximately the middle of the freelist. The next time the target entry
-in the table is allocated it will have exactly the same mach port name as the original target right we
-triggered the urefs bug on.
+We then send another 62 of these looper messages but with 2N ool ports. This has the effect of looping the generation number of the target port around while leaving it in approximately the middle of the freelist. The next time the target entry in the table is allocated it will have exactly the same mach port name as the original target right we triggered the urefs bug on.
 
-For this iOS exploit I target the send right to com.apple.iohideventsystem which launchd has, and which I can lookup from inside the
-container sandbox
+For this iOS exploit I target the send right to com.apple.iohideventsystem which launchd has, and which I can lookup from inside the container sandbox
 
-I look up the iohideventsystem service in launchd then use the urefs bug to free launchd's send right and use the
-looper messages to spin the generation number round. I then register a large number of dummy services
-with launchd so that one of them reuses the same mach port name as launchd thinks the iohideventsystem service has.
-(We can't register global mach services from inside the container sandbox but we can register App Group-restricted
-services, which work just the same for our purposes. This is why the exploit needs the App Groups capability.)
+I look up the iohideventsystem service in launchd then use the urefs bug to free launchd's send right and use the looper messages to spin the generation number round. I then register a large number of dummy services with launchd so that one of them reuses the same mach port name as launchd thinks the iohideventsystem service has. (We can't register global mach services from inside the container sandbox but we can register App Group-restricted services, which work just the same for our purposes. This is why the exploit needs the App Groups capability.)
 
-Now when any process looks up com.apple.iohideventsystem launchd will actually send them a send right
-to one of my dummy services :)
+Now when any process looks up com.apple.iohideventsystem launchd will actually send them a send right to one of my dummy services.
 
-I add all those dummy services to a portset and use that recieve right and the legitimate iohideventsystem send right
-I still have to MITM all these new connections to iohideventsystem. As mentioned earlier clients of iohideventsystem send
-it their task ports, so all I have to do is crash a process which runs as root and is a client of iohideventsystem. When it
-restarts it will send it's task port to me :-)
+I add all those dummy services to a portset and use that recieve right and the legitimate iohideventsystem send right I still have to MITM all these new connections to iohideventsystem. As mentioned earlier clients of iohideventsystem send it their task ports, so all I have to do is crash a process which runs as root and is a client of iohideventsystem. When it restarts it will send it's task port to me.
 
-*** Powerd crasher ***
+### Powerd crasher
 
 To crash powerd I use CVE-2016-7661:
 
 powerd checks in with launchd to get a server port and then wraps that in a CFPort:
-
+```
   pmServerMachPort = _SC_CFMachPortCreateWithPort(
                           "PowerManagement",
                           serverPort, 
                           mig_server_callback, 
                           &context);
-
+```
 It also asks to receive dead name notifications for other ports on that same server port:
-
+```
   mach_port_request_notification(
               mach_task_self(),           // task
               notify_port_in,                 // port that will die
@@ -377,9 +332,9 @@ It also asks to receive dead name notifications for other ports on that same ser
               CFMachPortGetPort(pmServerMachPort),        // notify port
               MACH_MSG_TYPE_MAKE_SEND_ONCE,               // notifyPoly
               &oldNotify);                                // previous
-
+```
 mig_server_callback is called off of the mach port run loop source to handle new messages on pmServerMachPort:
-
+```C
   static void
   mig_server_callback(CFMachPortRef port, void *msg, CFIndex size, void *info)
   {
@@ -393,9 +348,9 @@ mig_server_callback is called off of the mach port run loop source to handle new
       
       /* we have a request message */
       (void) pm_mig_demux(&bufRequest->Head, &bufReply->Head);
-
+```
 This passes the raw message to pm_mig_demux:
-
+```C
   static boolean_t 
   pm_mig_demux(
       mach_msg_header_t * request,
@@ -424,48 +379,39 @@ This passes the raw message to pm_mig_demux:
 
           return TRUE;
       }
-
-This passes the message to the MIG-generated code for the powermanagement subsystem, if that fails (because the msgh_id doesn't
-match the subsystem for example) then this compares the message's msgh_id field to MACH_NOTIFY_DEAD_NAME.
+```
+This passes the message to the MIG-generated code for the powermanagement subsystem, if that fails (because the msgh_id doesn't match the subsystem for example) then this compares the message's msgh_id field to MACH_NOTIFY_DEAD_NAME.
 
 deadRequest is the message cast to a mach_dead_name_notification_t which is defined like this in mach/notify.h:
-
+```C
   typedef struct {
       mach_msg_header_t   not_header;
       NDR_record_t        NDR;
       mach_port_name_t not_port;/* MACH_MSG_TYPE_PORT_NAME */
       mach_msg_format_0_trailer_t trailer;
   } mach_dead_name_notification_t;
+```
+This is a simple message, not a complex one. not_port is just a completely controlled integer which in this case will get passed directly to mach_port_deallocate.
 
-This is a simple message, not a complex one. not_port is just a completely controlled integer which in this case will get passed directly to
-mach_port_deallocate.
+The powerd code expects that only the kernel will send a MACH_NOTIFY_DEAD_NAME message but actually anyone can send this and force the privileged process to drop a reference on a controlled mach port name.
 
-The powerd code expects that only the kernel will send a MACH_NOTIFY_DEAD_NAME message but actually anyone can send this and force the privileged process
-to drop a reference on a controlled mach port name :)
+Multiplexing these two things (notifications and a mach service) onto the same port isn't possible to do safely as the kernel doesn't prevent user->user spoofing of notification messages - usually this wouldn't be a problem as attackers shouldn't have access to the notification port.
 
-Multiplexing these two things (notifications and a mach service) onto the same port isn't possible to do safely as the kernel doesn't prevent
-user->user spoofing of notification messages - usually this wouldn't be a problem as attackers shouldn't have access to the notification port.
+You could probably do quite interesting things with this bug but in this case I just want to crash the service. I do that by spoofing no-more-senders notifications for powerd's task port. Once powerd's send right to its own task port has been freed pretty much everything breaks - in this case I send a copy_powersources_info message, the receving code doesn't check the return value of a call to mach_vm_allocate which fails because the task's task port is wrong and leads to the use of an uninitialized pointer.
 
-You could probably do quite interesting things with this bug but in this case I just want to crash the service. I do that by spoofing no-more-senders
-notifications for powerd's task port. Once powerd's send right to its own task port has been freed pretty much everything breaks - in this case
-I send a copy_powersources_info message, the receving code doesn't check the return value of a call to mach_vm_allocate which fails because the
-task's task port is wrong and leads to the use of an uninitialized pointer.
-
-*** Kernel Bug ****
+### Kernel Bug
 
 See above for a short writeup of the kernel bug exploit. I will try to write a long-form writeup soon, but the code should be kind of clear.
 
-*** Post-exploitation ****
+### Post-exploitation
 
-I've taken a slightly different approach post-exploitation. Everything is data-only, I don't make any patches to r/o kernel memory. This means
-things should also work on the iPhone 7 but I don't have one to test :(
+I've taken a slightly different approach post-exploitation. Everything is data-only, I don't make any patches to r/o kernel memory. This means things should also work on the iPhone 7 but I don't have one to test :(
 
 There are a number of downsides to taking this approach though:
-  * technically a lot of these things I do are racy, but in pratice it works perfectly well enough for a research platform
-  * some things become quite fiddly which are simple with a TEXT patch
+  * Technically a lot of these things I do are racy, but in pratice it works perfectly well enough for a research platform
+  * Some things become quite fiddly which are simple with a TEXT patch
 
-This is also a research project for me; there are almost certainly far more downsides that I'm not aware of. iOS is complex, undocumented place
-and I don't really know what I'm doing!
+This is also a research project for me; there are almost certainly far more downsides that I'm not aware of. iOS is complex, undocumented place and I don't really know what I'm doing!
 
 The flow works like this:
 
@@ -475,41 +421,25 @@ Walk the process list and find the following tasks:
  containermanagerd
  launchd
 
-Disable the sandbox:
+#### Disable the sandbox
   sb_evaluate has a short-circuit success path if the process has the kern_cred credentials; neither the plaform policy nor
   the process's sandbox profile will be evaluated. We can use the kernel memory access to give the mach_portal process the
   kernel's credentials and we're no longer sandboxed.
 
-Fix launchd:
-  The sandbox escape made a mess in launchd so I fix up launchd's send right to iohideventsystem to point back to the correct port.
-  I then restart powerd because otherwise we hit a watchdog timeout.
+#### Fix launchd
+  The sandbox escape made a mess in launchd so I fix up launchd's send right to iohideventsystem to point back to the correct port. I then restart powerd because otherwise we hit a watchdog timeout.
 
-Patch amfid:
-  In order to run unsigned binaries and have somethign like a proper shell environment we need to convince amfid to allow binaries with invalid
-  signatures. Previous efforts in this area have replaced amfids import of MISValidateSignature to a function which would always return 0 (success)
-  but amfid now calls MISValidateSignatureAndCopyInfo which takes an out pointer to a CFDictionary which is expected to contain the correct CDHash
-  so just replacing the import won't work. I instead set myself as amfid's exception handler and point the MISValidateSignatureAndCopyInfo to an invalid
-  address. This means that amfid will crash whenever it validates a signature, and since we're the exception handler we get a message on the exception port
-  with the crashing thread state. I read the path to the file to be validated from amfid's address space, compute the CDHash SHA1 myself and write that into the
-  reply message which amfid will send back to the kernel then resume execution of amfid so it can send the reply.
+#### Patch amfid
+  In order to run unsigned binaries and have somethign like a proper shell environment we need to convince amfid to allow binaries with invalid signatures. Previous efforts in this area have replaced amfids import of MISValidateSignature to a function which would always return 0 (success)but amfid now calls MISValidateSignatureAndCopyInfo which takes an out pointer to a CFDictionary which is expected to contain the correct CDHash so just replacing the import won't work. I instead set myself as amfid's exception handler and point the MISValidateSignatureAndCopyInfo to an invalid address. This means that amfid will crash whenever it validates a signature, and since we're the exception handler we get a message on the exception port with the crashing thread state. I read the path to the file to be validated from amfid's address space, compute the CDHash SHA1 myself and write that into the reply message which amfid will send back to the kernel then resume execution of amfid so it can send the reply.
 
-Unsandbox containermangerd:
-  Since I haven't had time to investigate LvVM yet I don't remount the rootfs r/w which means that all the binaries we run are from the user partition. This means
-  that we can't prevent the kernel from requesting that containermanagerd allocate a container for them. I did test out doing a similar patch for containermanagerd
-  as I did for amfid which parsed the sb_packbuff requests from the kernel and fixed them up so that containermanagerd didn't get upset but it seemed easier to
-  just unsandbox it so it can make the directories it wants. This decision should be revisited, it's not ideal!
+#### Unsandbox containermangerd
+  Since I haven't had time to investigate LvVM yet I don't remount the rootfs r/w which means that all the binaries we run are from the user partition. This means that we can't prevent the kernel from requesting that containermanagerd allocate a container for them. I did test out doing a similar patch for containermanagerd as I did for amfid which parsed the sb_packbuff requests from the kernel and fixed them up so that containermanagerd didn't get upset but it seemed easier to just unsandbox it so it can make the directories it wants. This decision should be revisited, it's not ideal!
 
-Make sure all child processes are also unsandboxed:
-  Since the sandbox defeat involves cheating by using the kern_cred we need a way to make sure all our child processes also have the kern_cred. This is kind of a hack
-  but it works fine for my purposes. You should really revisit this if you want to improve on this code!
-  I allocate a new mach port and set that as my bootstrap port and spin up a thread which mitm's between that port and a real send right to launchd. I request an audit
-  trailer with each message which allows me to get the sender of the message and thus be notified when a new child starts. I then use the kernel memory access to
-  find that pid's proc structure and give it and all its threads the kernel creds. A constructor in libxpc will make a synchronous request to the bootstrap
-  port during dyld initialization before any application code actually runs so this works well enough to allow all our children to run unsandboxed
+#### Make sure all child processes are also unsandboxed
+  Since the sandbox defeat involves cheating by using the kern_cred we need a way to make sure all our child processes also have the kern_cred. This is kind of a hack but it works fine for my purposes. You should really revisit this if you want to improve on this code! I allocate a new mach port and set that as my bootstrap port and spin up a thread which mitm's between that port and a real send right to launchd. I request an audit trailer with each message which allows me to get the sender of the message and thus be notified when a new child starts. I then use the kernel memory access to find that pid's proc structure and give it and all its threads the kernel creds. A constructor in libxpc will make a synchronous request to the bootstrap port during dyld initialization before any application code actually runs so this works well enough to allow all our children to run unsandboxed
 
-Set kernel task port as host special port:
-  I also set the kernel task port as host special port 4 so you can easily get at it without having to rewrite the exploit code.
+#### Set kernel task port as host special port
+I also set the kernel task port as host special port 4 so you can easily get at it without having to rewrite the exploit code.
 
-Shell:
-  I chmod everything in the iosbinpack64 directory to be executable then run bash on a bind shell on port 4141. This isn't ideal but is enough to run test tools
-  and explore the system, talk to all the userclients, devices, mach services, sysctls etc that you want to.
+#### Shell
+I chmod everything in the iosbinpack64 directory to be executable then run bash on a bind shell on port 4141. This isn't ideal but is enough to run test tools and explore the system, talk to all the userclients, devices, mach services, sysctls etc that you want to.
